@@ -12,10 +12,6 @@ import (
 	"strings"
 )
 
-type textElement struct {
-	text []byte
-}
-
 type varElement struct {
 	name string
 	raw  bool
@@ -167,7 +163,7 @@ func (tmpl *Template) parseSection(section *sectionElement) error {
 
 		// put text into an item
 		text = text[0 : len(text)-len(tmpl.otag)]
-		section.elems = append(section.elems, &textElement{[]byte(text)})
+		section.elems = append(section.elems, text)
 		if tmpl.p < len(tmpl.data) && tmpl.data[tmpl.p] == '{' {
 			text, err = tmpl.readString("}" + tmpl.ctag)
 		} else {
@@ -248,13 +244,13 @@ func (tmpl *Template) parse() error {
 		text, err := tmpl.readString(tmpl.otag)
 		if err == io.EOF {
 			//put the remaining text in a block
-			tmpl.elems = append(tmpl.elems, &textElement{[]byte(text)})
+			tmpl.elems = append(tmpl.elems, text)
 			return nil
 		}
 
 		// put text into an item
 		text = text[0 : len(text)-len(tmpl.otag)]
-		tmpl.elems = append(tmpl.elems, &textElement{[]byte(text)})
+		tmpl.elems = append(tmpl.elems, text)
 
 		if tmpl.p < len(tmpl.data) && tmpl.data[tmpl.p] == '{' {
 			text, err = tmpl.readString("}" + tmpl.ctag)
@@ -517,8 +513,8 @@ func renderSection(section *sectionElement, contextChain []interface{}, buf io.W
 
 func renderElement(element interface{}, contextChain []interface{}, buf io.Writer) {
 	switch elem := element.(type) {
-	case *textElement:
-		buf.Write(elem.text)
+	case string:
+		io.WriteString(buf, elem)
 	case *varElement:
 		defer func() {
 			if r := recover(); r != nil {
