@@ -2,12 +2,8 @@ package mustache
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"os"
-	"path"
 	"reflect"
 	"strings"
 )
@@ -24,18 +20,12 @@ type sectionElement struct {
 	elems     []interface{}
 }
 
-type partialElement struct {
-	tmpl *Template
-	name string
-}
-
 type Template struct {
 	data    string
 	otag    string
 	ctag    string
 	p       int
 	curline int
-	dir     string
 	elems   []interface{}
 }
 
@@ -122,37 +112,6 @@ func (tmpl *Template) readString(s string) (string, error) {
 	return "", nil
 }
 
-func (tmpl *Template) parsePartial(name string) (*Template, error) {
-	filenames := []string{
-		path.Join(tmpl.dir, name),
-		path.Join(tmpl.dir, name+".mustache"),
-		path.Join(tmpl.dir, name+".stache"),
-		name,
-		name + ".mustache",
-		name + ".stache",
-	}
-	var filename string
-	for _, name := range filenames {
-		f, err := os.Open(name)
-		if err == nil {
-			filename = name
-			f.Close()
-			break
-		}
-	}
-	if filename == "" {
-		return nil, errors.New(fmt.Sprintf("Could not find partial %q", name))
-	}
-
-	partial, err := ParseFile(filename)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return partial, nil
-}
-
 func (tmpl *Template) parseSection(section *sectionElement) error {
 	for {
 		text, err := tmpl.readString(tmpl.otag)
@@ -207,20 +166,6 @@ func (tmpl *Template) parseSection(section *sectionElement) error {
 				return parseError{tmpl.curline, "interleaved closing tag: " + name}
 			} else {
 				return nil
-			}
-		case '>':
-			name := strings.TrimSpace(tag[1:])
-			partial := &partialElement{tmpl, name}
-			section.elems = append(section.elems, partial)
-		case '=':
-			if tag[len(tag)-1] != '=' {
-				return parseError{tmpl.curline, "Invalid meta tag"}
-			}
-			tag = strings.TrimSpace(tag[1 : len(tag)-1])
-			newtags := strings.SplitN(tag, " ", 2)
-			if len(newtags) == 2 {
-				tmpl.otag = newtags[0]
-				tmpl.ctag = newtags[1]
 			}
 		case '{':
 			if tag[len(tag)-1] == '}' {
@@ -289,20 +234,6 @@ func (tmpl *Template) parse() error {
 			tmpl.elems = append(tmpl.elems, &se)
 		case '/':
 			return parseError{tmpl.curline, "unmatched close tag"}
-		case '>':
-			name := strings.TrimSpace(tag[1:])
-			partial := &partialElement{tmpl, name}
-			tmpl.elems = append(tmpl.elems, partial)
-		case '=':
-			if tag[len(tag)-1] != '=' {
-				return parseError{tmpl.curline, "Invalid meta tag"}
-			}
-			tag = strings.TrimSpace(tag[1 : len(tag)-1])
-			newtags := strings.SplitN(tag, " ", 2)
-			if len(newtags) == 2 {
-				tmpl.otag = newtags[0]
-				tmpl.ctag = newtags[1]
-			}
 		case '{':
 			//use a raw tag
 			if tag[len(tag)-1] == '}' {
@@ -318,55 +249,6 @@ func (tmpl *Template) parse() error {
 	}
 
 	return nil
-}
-
-// See if name is a method of the value at some level of indirection.
-// The return values are the result of the call (which may be nil if
-// there's trouble) and whether a method of the right name exists with
-// any signature.
-func callMethod(data reflect.Value, name string) (result reflect.Value, found bool) {
-	found = false
-	// Method set depends on pointerness, and the value may be arbitrarily
-	// indirect.  Simplest approach is to walk down the pointer chain and
-	// see if we can find the method at each step.
-	// Most steps will see NumMethod() == 0.
-	for {
-		typ := data.Type()
-		if nMethod := data.Type().NumMethod(); nMethod > 0 {
-			for i := 0; i < nMethod; i++ {
-				method := typ.Method(i)
-				if method.Name == name {
-
-					found = true // we found the name regardless
-					// does receiver type match? (pointerness might be off)
-					if typ == method.Type.In(0) {
-						return call(data, method), found
-					}
-				}
-			}
-		}
-		if nd := data; nd.Kind() == reflect.Ptr {
-			data = nd.Elem()
-		} else {
-			break
-		}
-	}
-	return
-}
-
-// Invoke the method. If its signature is wrong, return nil.
-func call(v reflect.Value, method reflect.Method) reflect.Value {
-	funcType := method.Type
-	// Method must take no arguments, meaning as a func it has one argument (the receiver)
-	if funcType.NumIn() != 1 {
-		return reflect.Value{}
-	}
-	// Method must return a single value.
-	if funcType.NumOut() == 0 {
-		return reflect.Value{}
-	}
-	// Result will be the zeroth element of the returned slice.
-	return method.Func.Call([]reflect.Value{v})[0]
 }
 
 // Evaluate interfaces and pointers looking for a value that can look up the name, via a
@@ -390,16 +272,6 @@ Outer:
 	for _, ctx := range contextChain { //i := len(contextChain) - 1; i >= 0; i-- {
 		v := ctx.(reflect.Value)
 		for v.IsValid() {
-			typ := v.Type()
-			if n := v.Type().NumMethod(); n > 0 {
-				for i := 0; i < n; i++ {
-					m := typ.Method(i)
-					mtyp := m.Type
-					if m.Name == name && mtyp.NumIn() == 1 {
-						return v.Method(i).Call(nil)[0]
-					}
-				}
-			}
 			if name == "." {
 				return v
 			}
@@ -533,11 +405,6 @@ func renderElement(element interface{}, contextChain []interface{}, buf io.Write
 		}
 	case *sectionElement:
 		renderSection(elem, contextChain, buf)
-	case *partialElement:
-		child, err := elem.tmpl.parsePartial(elem.name)
-		if err == nil {
-			child.renderTemplate(contextChain, buf)
-		}
 	case *Template:
 		elem.renderTemplate(contextChain, buf)
 	}
@@ -560,17 +427,8 @@ func (tmpl *Template) Render(context ...interface{}) string {
 	return buf.String()
 }
 
-func (tmpl *Template) RenderInLayout(layout *Template, context ...interface{}) string {
-	content := tmpl.Render(context...)
-	allContext := make([]interface{}, len(context)+1)
-	copy(allContext[1:], context)
-	allContext[0] = map[string]string{"content": content}
-	return layout.Render(allContext...)
-}
-
 func ParseString(data string) (*Template, error) {
-	cwd := os.Getenv("CWD")
-	tmpl := Template{data, "{{", "}}", 0, 1, cwd, []interface{}{}}
+	tmpl := Template{data, "{{", "}}", 0, 1, []interface{}{}}
 	err := tmpl.parse()
 
 	if err != nil {
@@ -580,61 +438,10 @@ func ParseString(data string) (*Template, error) {
 	return &tmpl, err
 }
 
-func ParseFile(filename string) (*Template, error) {
-	data, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-
-	dirname, _ := path.Split(filename)
-
-	tmpl := Template{string(data), "{{", "}}", 0, 1, dirname, []interface{}{}}
-	err = tmpl.parse()
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &tmpl, nil
-}
-
 func Render(data string, context ...interface{}) string {
 	tmpl, err := ParseString(data)
 	if err != nil {
 		return err.Error()
 	}
 	return tmpl.Render(context...)
-}
-
-func RenderInLayout(data string, layoutData string, context ...interface{}) string {
-	layoutTmpl, err := ParseString(layoutData)
-	if err != nil {
-		return err.Error()
-	}
-	tmpl, err := ParseString(data)
-	if err != nil {
-		return err.Error()
-	}
-	return tmpl.RenderInLayout(layoutTmpl, context...)
-}
-
-func RenderFile(filename string, context ...interface{}) string {
-	tmpl, err := ParseFile(filename)
-	if err != nil {
-		return err.Error()
-	}
-	return tmpl.Render(context...)
-}
-
-func RenderFileInLayout(filename string, layoutFile string, context ...interface{}) string {
-	layoutTmpl, err := ParseFile(layoutFile)
-	if err != nil {
-		return err.Error()
-	}
-
-	tmpl, err := ParseFile(filename)
-	if err != nil {
-		return err.Error()
-	}
-	return tmpl.RenderInLayout(layoutTmpl, context...)
 }
