@@ -253,13 +253,12 @@ func (tmpl *Template) parse() error {
 
 // Evaluate interfaces and pointers looking for a value that can look up the name, via a
 // struct field, method, or map key, and return the result of the lookup.
-func lookup(contextChain []interface{}, name string) reflect.Value {
+func lookup(contextChain []reflect.Value, name string) reflect.Value {
 	// dot notation
 	if name != "." && strings.Contains(name, ".") {
 		parts := strings.SplitN(name, ".", 2)
-
 		v := lookup(contextChain, parts[0])
-		return lookup([]interface{}{v}, parts[1])
+		return lookup([]reflect.Value{v}, parts[1])
 	}
 
 	defer func() {
@@ -269,31 +268,25 @@ func lookup(contextChain []interface{}, name string) reflect.Value {
 	}()
 
 Outer:
-	for _, ctx := range contextChain { //i := len(contextChain) - 1; i >= 0; i-- {
-		v := ctx.(reflect.Value)
-		for v.IsValid() {
+	for _, ctx := range contextChain {
+		ctx = reflect.Indirect(ctx)
+		for ctx.IsValid() {
 			if name == "." {
-				return v
+				return ctx
 			}
-			switch av := v; av.Kind() {
-			case reflect.Ptr:
-				v = av.Elem()
-			case reflect.Interface:
-				v = av.Elem()
+			switch ctx.Kind() {
 			case reflect.Struct:
-				ret := av.FieldByName(name)
-				if ret.IsValid() {
-					return ret
-				} else {
+				v := ctx.FieldByName(name)
+				if !v.IsValid() {
 					continue Outer
 				}
+				return v
 			case reflect.Map:
-				ret := av.MapIndex(reflect.ValueOf(name))
-				if ret.IsValid() {
-					return ret
-				} else {
+				v := ctx.MapIndex(reflect.ValueOf(name))
+				if !v.IsValid() {
 					continue Outer
 				}
+				return v
 			default:
 				continue Outer
 			}
@@ -336,16 +329,14 @@ loop:
 	return v
 }
 
-func renderSection(section *sectionElement, contextChain []interface{}, buf io.Writer) {
+func renderSection(section *sectionElement, contextChain []reflect.Value, buf io.Writer) {
 	value := lookup(contextChain, section.name)
-	var context interface{}
-	var contexts = []interface{}{}
+	var context reflect.Value
+	var contexts = []reflect.Value{}
 
 	// guard against empty contextChain
 	if len(contextChain) > 0 {
-		context = contextChain[len(contextChain)-1].(reflect.Value)
-	} else {
-		context = make(map[string]interface{})
+		context = contextChain[len(contextChain)-1]
 	}
 
 	// if the value is nil, check if it's an inverted section
@@ -372,7 +363,7 @@ func renderSection(section *sectionElement, contextChain []interface{}, buf io.W
 		contexts = append(contexts, context)
 	}
 
-	chain2 := make([]interface{}, len(contextChain)+1)
+	chain2 := make([]reflect.Value, len(contextChain)+1)
 	copy(chain2[1:], contextChain)
 	//by default we execute the section
 	for _, ctx := range contexts {
@@ -383,7 +374,7 @@ func renderSection(section *sectionElement, contextChain []interface{}, buf io.W
 	}
 }
 
-func renderElement(element interface{}, contextChain []interface{}, buf io.Writer) {
+func renderElement(element interface{}, contextChain []reflect.Value, buf io.Writer) {
 	switch elem := element.(type) {
 	case string:
 		io.WriteString(buf, elem)
@@ -410,7 +401,7 @@ func renderElement(element interface{}, contextChain []interface{}, buf io.Write
 	}
 }
 
-func (tmpl *Template) renderTemplate(contextChain []interface{}, buf io.Writer) {
+func (tmpl *Template) renderTemplate(contextChain []reflect.Value, buf io.Writer) {
 	for _, elem := range tmpl.elems {
 		renderElement(elem, contextChain, buf)
 	}
@@ -418,7 +409,7 @@ func (tmpl *Template) renderTemplate(contextChain []interface{}, buf io.Writer) 
 
 func (tmpl *Template) Render(context ...interface{}) string {
 	var buf bytes.Buffer
-	var contextChain []interface{}
+	var contextChain []reflect.Value
 	for _, c := range context {
 		val := reflect.ValueOf(c)
 		contextChain = append(contextChain, val)
