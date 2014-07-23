@@ -73,7 +73,7 @@ func htmlEscape(w io.Writer, s []byte) {
 func (tmpl *Template) readString(s string) (string, error) {
 	i := tmpl.p
 	newlines := 0
-	for true {
+	for {
 		//are we at the end of the string?
 		if i+len(s) > len(tmpl.data) {
 			return tmpl.data[tmpl.p:], io.EOF
@@ -171,13 +171,13 @@ func (tmpl *Template) parseSection(section *sectionElement) error {
 			if tag[len(tag)-1] == '}' {
 				//use a raw tag
 				name := strings.TrimSpace(tag[1 : len(tag)-1])
-				section.elems = append(section.elems, &varElement{name, true})
+				section.elems = append(section.elems, varElement{name, true})
 			}
 		case '&':
 			name := strings.TrimSpace(tag[1:len(tag)])
-			section.elems = append(section.elems, &varElement{name, true})
+			section.elems = append(section.elems, varElement{name, true})
 		default:
-			section.elems = append(section.elems, &varElement{tag, false})
+			section.elems = append(section.elems, varElement{tag, false})
 		}
 	}
 
@@ -238,13 +238,13 @@ func (tmpl *Template) parse() error {
 			//use a raw tag
 			if tag[len(tag)-1] == '}' {
 				name := strings.TrimSpace(tag[1 : len(tag)-1])
-				tmpl.elems = append(tmpl.elems, &varElement{name, true})
+				tmpl.elems = append(tmpl.elems, varElement{name, true})
 			}
 		case '&':
 			name := strings.TrimSpace(tag[1:len(tag)])
-			tmpl.elems = append(tmpl.elems, &varElement{name, true})
+			tmpl.elems = append(tmpl.elems, varElement{name, true})
 		default:
-			tmpl.elems = append(tmpl.elems, &varElement{tag, false})
+			tmpl.elems = append(tmpl.elems, varElement{tag, false})
 		}
 	}
 
@@ -378,7 +378,7 @@ func renderElement(element interface{}, contextChain []reflect.Value, buf io.Wri
 	switch elem := element.(type) {
 	case string:
 		io.WriteString(buf, elem)
-	case *varElement:
+	case varElement:
 		defer func() {
 			if r := recover(); r != nil {
 				fmt.Printf("Panic while looking up %q: %s\n", elem.name, r)
